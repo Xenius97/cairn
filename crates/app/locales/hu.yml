@@ -162,6 +162,24 @@ toolbar:
   apply_patch: "Patch alkalmazása…"
   open_editor: "Megnyitás szerkesztőben"
 
+panel_layout:
+  menu: "Elrendezés"
+  classic: "Klasszikus elrendezés használata"
+  customize: "Mozgatható panelek bekapcsolása"
+  save: "Elrendezés mentése"
+  save_description: "Menti az Előzmények és a Változások paneljeinek elrendezését. Ha már van ilyen nevű mentés, felülírja."
+  name: "Elrendezés neve"
+  presets: "Mentett elrendezés betöltése"
+  delete: "Elrendezés törlése"
+  delete_confirm: "Biztosan törlöd ezt a mentett elrendezést? „%{name}”"
+  delete_ok: "Törlés"
+  navigation: "Navigáció"
+  reset: "Gyári elrendezés visszaállítása"
+  commit_details: "Commit részletei"
+  changed_files: "Módosított fájlok"
+  diff: "Diff"
+  commit: "Commit"
+
 page:
   history: "Előzmények"
   changes: "Változások"
@@ -285,6 +303,7 @@ undo:
   stash_file: "Fájl visszahozása félretett változásból"
 
 history:
+  show_more_diff: "További sorok megjelenítése"
   this_branch: "Ez az ág"
   loading_more: "Régebbi commitok betöltése…"
   col_branch: "Ág"

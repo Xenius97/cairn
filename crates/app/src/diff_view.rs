@@ -136,7 +136,7 @@ pub(crate) enum DiffSource {
     Page,
 }
 
-fn expand_tabs(text: &str, width: usize) -> Cow<'_, str> {
+pub(crate) fn expand_tabs(text: &str, width: usize) -> Cow<'_, str> {
     if !text.contains('\t') {
         return Cow::Borrowed(text);
     }

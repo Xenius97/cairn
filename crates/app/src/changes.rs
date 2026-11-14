@@ -478,7 +478,7 @@ impl RepoView {
             .into_any_element()
     }
 
-    fn render_file_list(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_file_list(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let unstaged: Vec<FileStatus> = self.status.unstaged().cloned().collect();
         let staged: Vec<FileStatus> = self.status.staged().cloned().collect();
@@ -567,7 +567,7 @@ impl RepoView {
             .children(staged.iter().map(|f| self.render_file_row(f, true, cx)).collect::<Vec<_>>())
     }
 
-    fn render_commit_box(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_commit_box(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let staged = self.status.staged().count();
         let summary_len = self.summary.read(cx).value().chars().count();
@@ -675,7 +675,32 @@ impl RepoView {
             )
     }
 
-    pub(crate) fn render_changes(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_changes(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let diff_panel = self.render_changes_diff(cx).into_any_element();
+        if self.status.is_clean() && !self.amend {
+            return diff_panel;
+        }
+        let theme = cx.theme().clone();
+        use gpui_kit::component::resizable::{h_resizable, resizable_panel};
+        let view = cx.entity();
+        h_resizable("changes-split")
+            .child(
+                resizable_panel()
+                    .size(px(self.settings.appearance.list_width.clamp(220., 640.)))
+                    .size_range(px(220.)..px(640.))
+                    .child(v_flex().size_full().border_r_1().border_color(theme.border).bg(theme.sidebar).child(div().flex_1().min_h_0().child(self.render_file_list(cx)))),
+            )
+            .child(resizable_panel().child(div().size_full().child(diff_panel)))
+            .child(resizable_panel().size(px(330.)).size_range(px(280.)..px(560.)).child(div().size_full().border_l_1().border_color(theme.border).child(self.render_commit_box(cx))))
+            .on_resize(move |state, _, cx| {
+                if let Some(w) = state.read(cx).sizes().first().copied() {
+                    view.update(cx, |v, cx| v.remember_panel(None, Some(f32::from(w)), cx));
+                }
+            })
+            .into_any_element()
+    }
+
+    pub(crate) fn render_changes_diff(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         if self.status.is_clean() && !self.amend {
             return v_flex()
@@ -683,7 +708,7 @@ impl RepoView {
                 .child(div().flex_1().child(empty_state(IconName::CircleCheckBig, tr("changes.clean_title"), tr("changes.clean_body"), cx)))
                 .into_any_element();
         }
-        let diff_panel = match (&self.change, self.change_diff.clone()) {
+        match (&self.change, self.change_diff.clone()) {
             (Some(change), Some(diff)) => {
                 let sel_count = self.line_selection.len();
                 let staged = change.staged;
@@ -758,25 +783,7 @@ impl RepoView {
             }
             (Some(_), None) => crate::skeleton::diff(cx).into_any_element(),
             _ => empty_state(IconName::FileDiff, tr("changes.pick_title"), tr("changes.pick_body"), cx).into_any_element(),
-        };
-
-        use gpui_kit::component::resizable::{h_resizable, resizable_panel};
-        let view = cx.entity();
-        h_resizable("changes-split")
-            .child(
-                resizable_panel()
-                    .size(px(self.settings.appearance.list_width.clamp(220., 640.)))
-                    .size_range(px(220.)..px(640.))
-                    .child(v_flex().size_full().border_r_1().border_color(theme.border).bg(theme.sidebar).child(div().flex_1().min_h_0().child(self.render_file_list(cx)))),
-            )
-            .child(resizable_panel().child(div().size_full().child(diff_panel)))
-            .child(resizable_panel().size(px(330.)).size_range(px(280.)..px(560.)).child(div().size_full().border_l_1().border_color(theme.border).child(self.render_commit_box(cx))))
-            .on_resize(move |state, _, cx| {
-                if let Some(w) = state.read(cx).sizes().first().copied() {
-                    view.update(cx, |v, cx| v.remember_panel(None, Some(f32::from(w)), cx));
-                }
-            })
-            .into_any_element()
+        }
     }
 }
 

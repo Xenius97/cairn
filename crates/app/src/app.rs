@@ -291,7 +291,16 @@ impl CairnApp {
                 }
                 self.library.open_tab(&repo.root);
                 let settings = self.settings.clone();
-                let view = cx.new(|cx| RepoView::new(repo, settings, window, cx));
+                let app = cx.weak_entity();
+                let view = cx.new(|cx| RepoView::new(repo, settings, app, window, cx));
+                let mut was_docked = false;
+                cx.observe(&view, move |_, view, cx| {
+                    let docked = view.read(cx).uses_panel_layout();
+                    if was_docked != docked {
+                        was_docked = docked;
+                        cx.notify();
+                    }
+                }).detach();
                 cx.subscribe_in(&view, window, |this, _, ev: &crate::repo_view::OpenRepoEvent, window, cx| {
                     let path = ev.0.clone();
                     let task = cx.spawn_in(window, async move |this, cx| {
@@ -937,7 +946,7 @@ impl CairnApp {
         col.border_t_1().border_color(theme.border).mt_3()
     }
 
-    fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let categories = self.library.categories.clone();
         let uncategorized: Vec<RepoEntry> = self.library.repos_in(None).into_iter().cloned().collect();
@@ -1533,6 +1542,9 @@ impl Render for CairnApp {
             Some(tab) => tab.into_any_element(),
             None => self.render_home(cx).into_any_element(),
         };
+        let sidebar_in_layout = self.active_tab().is_some_and(|tab| {
+            tab.read(cx).uses_panel_layout()
+        });
         let _ = window;
         use crate::palette as p;
         v_flex()
@@ -1596,7 +1608,7 @@ impl Render for CairnApp {
                 h_flex()
                     .flex_1()
                     .min_h_0()
-                    .when(self.sidebar_open, |d| d.child(div().flex_none().w(px(260.)).h_full().child(self.render_sidebar(cx))))
+                    .when(self.sidebar_open && !sidebar_in_layout, |d| d.child(div().flex_none().w(px(260.)).h_full().child(self.render_sidebar(cx))))
                     .child(div().flex_1().min_w_0().h_full().child(main)),
             )
     }

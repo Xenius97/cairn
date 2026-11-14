@@ -649,6 +649,7 @@ pub struct Settings {
     pub git: GitBehavior,
     pub remotes: Remotes,
     pub workspace: Workspace,
+    pub panel_layouts: PanelLayouts,
     pub ai: Ai,
     pub checks: Checks,
     pub keyboard: Keyboard,
@@ -657,6 +658,21 @@ pub struct Settings {
     pub updates: Updates,
     pub tools: Tools,
     pub advanced: Advanced,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PanelLayouts {
+    pub enabled: bool,
+    pub history: Option<String>,
+    pub changes: Option<String>,
+    pub presets: std::collections::BTreeMap<String, PanelLayoutPreset>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PanelLayoutPreset {
+    pub history: String,
+    pub changes: String,
 }
 
 impl Settings {

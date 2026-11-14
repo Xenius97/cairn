@@ -162,6 +162,24 @@ toolbar:
   apply_patch: "Apply patch…"
   open_editor: "Open in editor"
 
+panel_layout:
+  menu: "Layout"
+  classic: "Use classic layout"
+  customize: "Enable movable panels"
+  save: "Save layout preset"
+  save_description: "Save the History and Changes panel arrangements. An existing preset with the same name is replaced."
+  name: "Preset name"
+  presets: "Load preset"
+  delete: "Delete preset"
+  delete_confirm: "Delete the layout preset \"%{name}\"?"
+  delete_ok: "Delete"
+  navigation: "Navigation"
+  reset: "Restore factory layout"
+  commit_details: "Commit details"
+  changed_files: "Changed files"
+  diff: "Diff"
+  commit: "Commit"
+
 page:
   history: "History"
   changes: "Changes"
@@ -285,6 +303,7 @@ undo:
   stash_file: "Restore a file from a stash"
 
 history:
+  show_more_diff: "Show more lines"
   this_branch: "This branch"
   loading_more: "Loading older commits…"
   col_branch: "Branch"

@@ -177,6 +177,8 @@ pub(crate) struct RepoView {
     pub repo: Arc<Repository>,
     pub name: SharedString,
     pub settings: Settings,
+    pub(crate) app: WeakEntity<crate::app::CairnApp>,
+    pub(crate) panel_layouts: crate::panel_layout::RepoPanelLayouts,
     pub status: RepoStatus,
     pub commits: Vec<CommitInfo>,
     pub rows: Vec<GraphRow>,
@@ -219,7 +221,10 @@ pub(crate) struct RepoView {
     pub selected_commit: Option<String>,
     pub details: Option<CommitDetails>,
     pub detail_pushed: Option<(String, bool)>,
-    pub detail_file: Option<FileDiff>,
+    pub detail_file: Option<Result<FileDiff, String>>,
+    pub expanded_commit_file: Option<String>,
+    pub(crate) inline_diff_limit: usize,
+    commit_file_request: u64,
     pub change: Option<SelectedChange>,
     pub change_diff: Option<FileDiff>,
     pub line_selection: LineSelection,
@@ -254,7 +259,7 @@ pub(crate) struct RepoView {
 }
 
 impl RepoView {
-    pub(crate) fn new(repo: Repository, settings: Settings, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(repo: Repository, settings: Settings, app: WeakEntity<crate::app::CairnApp>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let name: SharedString = repo.name().into();
         crate::repo_settings::auto_apply(&repo.git, &settings.profiles);
         {
@@ -283,6 +288,8 @@ impl RepoView {
         })
         .detach();
         let mut view = Self {
+            app,
+            panel_layouts: Default::default(),
             repo: Arc::new(repo),
             name,
             settings,
@@ -329,6 +336,9 @@ impl RepoView {
             details: None,
             detail_pushed: None,
             detail_file: None,
+            expanded_commit_file: None,
+            inline_diff_limit: crate::history::INLINE_DIFF_BATCH,
+            commit_file_request: 0,
             change: None,
             change_diff: None,
             line_selection: LineSelection::new(),
@@ -596,6 +606,10 @@ impl RepoView {
         }
         let _ = window;
         cx.notify();
+    }
+
+    pub(crate) fn uses_panel_layout(&self) -> bool {
+        self.settings.panel_layouts.enabled && self.loaded_once && matches!(self.page, Page::History | Page::Changes)
     }
 
     /// Opens a file or folder in the editor from Settings → Tools, or the system's default program.
@@ -1073,6 +1087,8 @@ impl RepoView {
         }
         self.selected_commit = Some(id.clone());
         self.detail_file = None;
+        self.expanded_commit_file = None;
+        self.commit_file_request += 1;
         let git = self.git();
         let upstream = self.status.branch.upstream.clone().or_else(|| self.remotes.first().map(|r| format!("{}/HEAD", r.name)));
         let task = cx.spawn(async move |this, cx| {
@@ -1099,6 +1115,17 @@ impl RepoView {
 
     pub(crate) fn open_commit_file(&mut self, path: String, cx: &mut Context<Self>) {
         let Some(id) = self.selected_commit.clone() else { return };
+        self.commit_file_request += 1;
+        self.detail_file = None;
+        if self.expanded_commit_file.as_deref() == Some(path.as_str()) {
+            self.expanded_commit_file = None;
+            cx.notify();
+            return;
+        }
+        self.expanded_commit_file = Some(path.clone());
+        self.inline_diff_limit = crate::history::INLINE_DIFF_BATCH;
+        let request = self.commit_file_request;
+        cx.notify();
         let git = self.git();
         let opts = self.diff_options();
         let task = cx.spawn(async move |this, cx| {
@@ -1107,8 +1134,10 @@ impl RepoView {
                 .spawn(async move { cairn_core::diff::file_diff(&git, &DiffTarget::Commit(id), &path, false, opts) })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                this.detail_file = diff.ok();
-                cx.notify();
+                if this.commit_file_request == request {
+                    this.detail_file = Some(diff.map_err(|error| friendly_error(&error)));
+                    cx.notify();
+                }
             });
         });
         self._tasks.push(task);
@@ -1374,7 +1403,7 @@ impl RepoView {
         crate::dialogs::undo_history(cx.entity(), window, cx);
     }
 
-    fn render_toolbar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_toolbar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let branch_label: SharedString = self
             .current_branch()
@@ -1716,6 +1745,7 @@ impl RepoView {
                     )
                     .when(conflict_count > 0, |d| d.child(page_tab("page-conflicts", Page::Conflicts, IconName::TriangleAlert, tr("page.conflicts"), conflict_count, cx)))
                     .child(spacer())
+                    .child(self.panel_layout_menu(icons_only, cx))
                     .child(tools)
             })
             .when(self.in_progress != InProgress::None, |d| d.child(self.render_in_progress(window, cx)))
@@ -1851,7 +1881,7 @@ impl Render for RepoView {
             window.push_notification(Notification::info(text).title(self.name.clone()).in_app_and_system(), cx);
         }
         let forced = if cfg!(debug_assertions) { std::env::var("CAIRN_DEBUG_SKELETON").ok() } else { None };
-        let body = if let Some(kind) = forced {
+        let body = if let Some(kind) = &forced {
             match kind.as_str() {
                 "changes" => crate::skeleton::changes(cx).into_any_element(),
                 "pulls" => h_flex()
@@ -1868,8 +1898,10 @@ impl Render for RepoView {
             }
         } else {
             match self.page {
-                Page::History => self.render_history(window, cx).into_any_element(),
-                Page::Changes => self.render_changes(window, cx).into_any_element(),
+                Page::History if self.uses_panel_layout() => self.render_panel_layout(crate::panel_layout::LayoutPage::History, window, cx),
+                Page::Changes if self.uses_panel_layout() => self.render_panel_layout(crate::panel_layout::LayoutPage::Changes, window, cx),
+                Page::History => self.render_history(window, cx),
+                Page::Changes => self.render_changes(cx),
                 Page::Branches => self.render_branches(window, cx).into_any_element(),
                 Page::Stack => self.render_stack(window, cx).into_any_element(),
                 Page::Rebase => self.render_rebase(window, cx).into_any_element(),
@@ -1886,6 +1918,7 @@ impl Render for RepoView {
                 Page::PullRequests => self.render_pulls(window, cx).into_any_element(),
             }
         };
+        let toolbar = (!self.uses_panel_layout() || forced.is_some()).then(|| self.render_toolbar(window, cx).into_any_element());
         v_flex()
             .relative()
             .size_full()
@@ -1893,7 +1926,7 @@ impl Render for RepoView {
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| this.handle_key(ev, window, cx)))
             .on_action(cx.listener(|this, _: &crate::palette::UndoHistory, window, cx| this.open_undo(window, cx)))
-            .child(self.render_toolbar(window, cx))
+            .children(toolbar)
             .child({
                 let page = div().size_full().child(body);
                 if self.settings.appearance.reduce_motion {

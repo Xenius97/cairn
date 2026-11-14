@@ -10,6 +10,7 @@ mod home;
 mod live_op;
 mod pages;
 mod palette;
+mod panel_layout;
 mod repo_settings;
 mod commit_guard;
 mod commit_menu;

@@ -1,3 +1,4 @@
+use cairn_core::diff::{FileDiff, LineKind};
 use cairn_core::graph::{GraphRow, LinePart};
 use cairn_core::log::{CommitDetails, CommitInfo, RefKind};
 use cairn_core::settings::{DateFormat, GraphStyle};
@@ -14,6 +15,53 @@ use crate::repo_view::RepoView;
 use crate::widgets::{avatar, empty_state, full_time, hstack, icon, lane_color, relative_time, spacer, status_letter, toggle_pill, tr};
 
 pub(crate) const ROW_H: f32 = 34.;
+pub(crate) const INLINE_DIFF_BATCH: usize = 400;
+
+fn inline_commit_diff(diff: &FileDiff, limit: usize, tab_width: usize, line_numbers: bool, cx: &mut Context<RepoView>) -> AnyElement {
+    let theme = cx.theme();
+    let total = diff.hunks.iter().map(|hunk| hunk.lines.len()).sum::<usize>();
+    let digits = diff.hunks.iter()
+        .map(|hunk| (hunk.old_start + hunk.old_count).max(hunk.new_start + hunk.new_count))
+        .max().unwrap_or(0).to_string().len();
+    let number = |value: Option<u32>| {
+        div().flex_none().w(px((digits.max(3) as f32 + 1.) * 7.)).text_right()
+            .text_color(theme.muted_foreground)
+            .child(value.map(|n| n.to_string()).unwrap_or_default())
+    };
+    let mut remaining = limit;
+    let hunks = diff.hunks.iter().filter(|hunk| !hunk.lines.is_empty()).filter_map(|hunk| {
+        if remaining == 0 {
+            return None;
+        }
+        let count = remaining.min(hunk.lines.len());
+        remaining -= count;
+        Some(v_flex()
+            .child(div().px_2().py_0p5().truncate().bg(theme.secondary).text_color(theme.muted_foreground).child(hunk.header()))
+            .children(hunk.lines.iter().take(count).map(|line| {
+                let (sign, accent) = match line.kind {
+                    LineKind::Added => ("+", Some(theme.green)),
+                    LineKind::Removed => ("−", Some(theme.red)),
+                    _ => ("", None),
+                };
+                h_flex().min_h(px(17.)).items_start().gap_1().pr_2()
+                    .when_some(accent, |row, color| row.bg(color.opacity(0.12)))
+                    .when(line_numbers, |row| row.child(number(line.old_no)).child(number(line.new_no)))
+                    .child(div().flex_none().w(px(14.)).text_center().text_color(accent.unwrap_or(theme.muted_foreground)).child(sign))
+                    .child(div().flex_1().min_w_0().whitespace_normal()
+                        .child(crate::diff_view::expand_tabs(&line.text, tab_width).into_owned()))
+            })))
+    }).collect::<Vec<_>>();
+    v_flex().ml_4().my_1().min_w_0().overflow_hidden().rounded_sm()
+        .bg(theme.background).font_family(theme.mono_font_family.clone()).text_size(px(11.))
+        .children(hunks)
+        .when(total > limit, |diff| diff.child(Button::new("inline-diff-more").small().ghost()
+            .label(tr("history.show_more_diff"))
+            .on_click(cx.listener(|repo, _, _, cx| {
+                repo.inline_diff_limit += INLINE_DIFF_BATCH;
+                cx.notify();
+            }))))
+        .into_any_element()
+}
 const LANE_W: f32 = 14.;
 const MIN_LANE_W: f32 = 6.;
 const MAX_GRAPH_W: f32 = 200.;
@@ -1002,7 +1050,26 @@ impl RepoView {
         }
     }
 
-    pub(crate) fn render_history(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_history(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let main = self.render_history_list(window, cx).into_any_element();
+        if self.commits.is_empty() {
+            return main;
+        }
+        let theme = cx.theme().clone();
+        let details = div().size_full().border_l_1().border_color(theme.border).bg(theme.sidebar).child(self.render_commit_details(window, cx));
+        let view = cx.entity();
+        gpui_kit::component::resizable::h_resizable("history-split")
+            .child(gpui_kit::component::resizable::resizable_panel().child(div().size_full().child(main)))
+            .child(gpui_kit::component::resizable::resizable_panel().size(px(self.settings.appearance.details_width.clamp(300., 900.))).size_range(px(300.)..px(900.)).child(details))
+            .on_resize(move |state, _, cx| {
+                if let Some(w) = state.read(cx).sizes().get(1).copied() {
+                    view.update(cx, |v, cx| v.remember_panel(Some(f32::from(w)), None, cx));
+                }
+            })
+            .into_any_element()
+    }
+
+    pub(crate) fn render_history_list(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         if self.commits.is_empty() {
             return div()
@@ -1187,23 +1254,10 @@ impl RepoView {
                             .child(div().w(px(64.)).child(tr("history.col_commit").to_uppercase())),
                     )
                     .child(div().flex_1().min_h_0().child(list));
-        let details = div().size_full().border_l_1().border_color(theme.border).bg(theme.sidebar).child(self.render_commit_details(window, cx));
-        if self.detail_file.is_some() {
-            return h_flex().size_full().child(main).child(div().flex_none().w(relative(0.5)).min_w(px(380.)).h_full().child(details)).into_any_element();
-        }
-        let view = cx.entity();
-        gpui_kit::component::resizable::h_resizable("history-split")
-            .child(gpui_kit::component::resizable::resizable_panel().child(main.size_full()))
-            .child(gpui_kit::component::resizable::resizable_panel().size(px(self.settings.appearance.details_width.clamp(300., 900.))).size_range(px(300.)..px(900.)).child(details))
-            .on_resize(move |state, _, cx| {
-                if let Some(w) = state.read(cx).sizes().get(1).copied() {
-                    view.update(cx, |v, cx| v.remember_panel(Some(f32::from(w)), None, cx));
-                }
-            })
-            .into_any_element()
+        main.into_any_element()
     }
 
-    fn render_commit_details(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_commit_details(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let Some(d) = self.details.clone() else {
             if self.selected_commit.is_some() {
@@ -1211,32 +1265,16 @@ impl RepoView {
             }
             return div().size_full().child(empty_state(IconName::MousePointerClick, tr("history.pick_title"), tr("history.pick_body"), cx)).into_any_element();
         };
-        if let Some(file) = self.detail_file.clone() {
-            return v_flex()
-                .size_full()
-                .child(
-                    hstack()
-                        .gap_2()
-                        .px_2()
-                        .py_1p5()
-                        .border_b_1()
-                        .border_color(theme.border)
-                        .child(
-                            Button::new("back-to-commit")
-                                .xsmall()
-                                .ghost()
-                                .icon(icon(IconName::ArrowLeft))
-                                .label(tr("history.back"))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.detail_file = None;
-                                    cx.notify();
-                                })),
-                        )
-                        .child(div().min_w_0().truncate().text_sm().font_family(theme.mono_font_family.clone()).child(file.path.clone())),
-                )
-                .child(div().flex_1().min_h_0().child(self.render_file_diff(DiffSource::CommitFile, &file, cx)))
-                .into_any_element();
-        }
+        let expanded = self.expanded_commit_file.clone();
+        let mut inline_diff = expanded.as_ref().map(|_| match self.detail_file.clone() {
+            Some(Ok(diff)) if diff.is_binary => div().ml_4().h(px(180.))
+                .child(self.render_file_diff(DiffSource::CommitFile, &diff, cx)).into_any_element(),
+            Some(Ok(diff)) if diff.hunks.is_empty() => div().ml_4().py_2().text_xs()
+                .text_color(theme.muted_foreground).child(tr("diff.no_changes_title")).into_any_element(),
+            Some(Ok(diff)) => inline_commit_diff(&diff, self.inline_diff_limit, self.settings.diffs.tab_width.max(1) as usize, self.settings.diffs.line_numbers, cx),
+            Some(Err(error)) => div().p_3().text_sm().text_color(theme.muted_foreground).child(error).into_any_element(),
+            None => div().ml_4().py_2().child(gpui_kit::component::spinner::Spinner::new().xsmall()).into_any_element(),
+        });
         let short = d.id.chars().take(10).collect::<String>();
         let id_copy = d.id.clone();
         let (adds, dels) = d.files.iter().fold((0, 0), |(a, r), f| (a + f.added.unwrap_or(0), r + f.removed.unwrap_or(0)));
@@ -1326,12 +1364,13 @@ impl RepoView {
             .child(
                 v_flex().gap_0p5().children(d.files.iter().enumerate().map(|(i, f)| {
                     let path = f.path.clone();
+                    let is_expanded = expanded.as_ref() == Some(&path);
                     let (dir, name) = match f.path.rsplit_once('/') {
                         Some((dir, name)) => (format!("{dir}/"), name.to_string()),
                         None => (String::new(), f.path.clone()),
                     };
                     let theme = cx.theme().clone();
-                    div()
+                    let row = div()
                         .id(("detail-file", i))
                         .flex()
                         .items_center()
@@ -1341,6 +1380,7 @@ impl RepoView {
                         .rounded(px(4.))
                         .cursor_pointer()
                         .hover(|s| s.bg(cx.theme().list_hover))
+                        .child(icon(if is_expanded { IconName::ChevronDown } else { IconName::ChevronRight }).xsmall())
                         .child(status_letter(f.status, cx))
                         .child(
                             div()
@@ -1376,7 +1416,8 @@ impl RepoView {
                                     v3.update(cx, |v, cx| v.open_difftool(what, p, window, cx));
                                 }))
                             }
-                        })
+                        });
+                    v_flex().min_w_0().child(row).children(if is_expanded { inline_diff.take() } else { None })
                 })),
             )
             .into_any_element()
